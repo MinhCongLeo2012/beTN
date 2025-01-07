@@ -24,6 +24,22 @@ class ExamController {
         questions
       } = req.body;
 
+      // Validate input data
+      if (!tende || !monhoc || !mucdich || !khoi || !Array.isArray(questions)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Thiếu thông tin bắt buộc để tạo đề thi'
+        });
+      }
+
+      console.log('Creating exam with data:', {
+        tende,
+        monhoc,
+        mucdich,
+        khoi,
+        questionsCount: questions.length
+      });
+
       await client.query('BEGIN');
 
       // 1. Tạo đề thi
@@ -47,52 +63,69 @@ class ExamController {
           mucdich,
           khoi
         ]
-      );
+      ).catch(err => {
+        console.error('Error creating exam:', err);
+        throw new Error(`Lỗi khi tạo đề thi: ${err.message}`);
+      });
 
       const examId = examResult.rows[0].iddethi;
+      console.log('Created exam with ID:', examId);
 
       // 2. Thêm các câu hỏi và đáp án
-      for (const question of questions) {
-        // Thêm câu hỏi
-        const questionResult = await client.query(
-          `INSERT INTO CAUHOI (
-            iddethi,
-            noidung,
-            dap_an_a,
-            dap_an_b,
-            dap_an_c,
-            dap_an_d,
-            diem
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING idcauhoi`,
-          [
-            examId,
-            question.noidung,
-            question.dap_an_a,
-            question.dap_an_b,
-            question.dap_an_c,
-            question.dap_an_d,
-            question.diem
-          ]
-        );
+      for (const [index, question] of questions.entries()) {
+        try {
+          // Validate question data
+          if (!question.noidung || !question.dapandung) {
+            throw new Error(`Câu hỏi ${index + 1} thiếu thông tin bắt buộc`);
+          }
 
-        const questionId = questionResult.rows[0].idcauhoi;
+          // Thêm câu hỏi
+          const questionResult = await client.query(
+            `INSERT INTO CAUHOI (
+              iddethi,
+              noidung,
+              dap_an_a,
+              dap_an_b,
+              dap_an_c,
+              dap_an_d,
+              diem
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING idcauhoi`,
+            [
+              examId,
+              question.noidung,
+              question.dap_an_a,
+              question.dap_an_b,
+              question.dap_an_c,
+              question.dap_an_d,
+              question.diem || 1 // Default score if not provided
+            ]
+          );
 
-        // Thêm đáp án
-        const answerResult = await client.query(
-          'INSERT INTO DAPAN (dapandung) VALUES ($1) RETURNING iddapan',
-          [question.dapandung]
-        );
+          const questionId = questionResult.rows[0].idcauhoi;
+          console.log(`Added question ${index + 1} with ID:`, questionId);
 
-        const answerId = answerResult.rows[0].iddapan;
+          // Thêm đáp án
+          const answerResult = await client.query(
+            'INSERT INTO DAPAN (dapandung) VALUES ($1) RETURNING iddapan',
+            [question.dapandung]
+          );
 
-        // Liên kết câu hỏi với đáp án và mức độ
-        await client.query(
-          'INSERT INTO CH_DA_MD (idcauhoi, iddapan, idmucdo) VALUES ($1, $2, $3)',
-          [questionId, answerId, question.mucdo || 'THONG_HIEU'] // Sử dụng mức độ từ câu hỏi hoặc mặc định
-        );
+          const answerId = answerResult.rows[0].iddapan;
+
+          // Liên kết câu hỏi với đáp án và mức độ
+          await client.query(
+            'INSERT INTO CH_DA_MD (idcauhoi, iddapan, idmucdo) VALUES ($1, $2, $3)',
+            [questionId, answerId, question.mucdo || 'THONG_HIEU']
+          );
+
+        } catch (questionError) {
+          console.error(`Error processing question ${index + 1}:`, questionError);
+          throw new Error(`Lỗi khi thêm câu hỏi ${index + 1}: ${questionError.message}`);
+        }
       }
 
       await client.query('COMMIT');
+      console.log('Exam creation completed successfully');
 
       res.json({
         success: true,
@@ -102,10 +135,27 @@ class ExamController {
     } catch (error) {
       await client.query('ROLLBACK');
       console.error('Error in createExam:', error);
-      res.status(500).json({
+      
+      let statusCode = 500;
+      let errorMessage = 'Lỗi khi tạo đề thi';
+
+      // Handle specific error cases
+      if (error.code === '23505') {
+        statusCode = 400;
+        errorMessage = 'Đề thi với tên này đã tồn tại';
+      } else if (error.code === '23503') {
+        statusCode = 400;
+        errorMessage = 'Dữ liệu tham chiếu không hợp lệ';
+      }
+
+      res.status(statusCode).json({
         success: false,
-        message: 'Lỗi khi tạo đề thi',
-        error: error.message
+        message: errorMessage,
+        error: {
+          code: error.code,
+          detail: error.detail,
+          message: error.message
+        }
       });
     } finally {
       client.release();
