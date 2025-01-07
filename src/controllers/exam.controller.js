@@ -32,18 +32,40 @@ class ExamController {
       // Validate references first
       try {
         // Check monhoc exists
+        console.log('Checking subject with code:', monhoc);
+        
         const monhocCheck = await client.query(
-          'SELECT idmonhoc FROM MONHOC WHERE idmonhoc = $1',
+          `SELECT idmonhoc, tenmonhoc 
+           FROM MONHOC 
+           WHERE idmonhoc = $1 OR LOWER(idmonhoc) = LOWER($1)`,
           [monhoc]
         );
+        
+        console.log('Subject check result:', {
+          searchedCode: monhoc,
+          found: monhocCheck.rows.length > 0,
+          result: monhocCheck.rows
+        });
+
+        // List all available subjects for debugging
+        const allSubjects = await client.query('SELECT idmonhoc, tenmonhoc FROM MONHOC');
+        console.log('Available subjects:', allSubjects.rows);
+
         if (monhocCheck.rows.length === 0) {
           return res.status(400).json({
             success: false,
             message: 'Môn học không tồn tại',
-            field: 'monhoc'
+            field: 'monhoc',
+            detail: {
+              providedCode: monhoc,
+              availableSubjects: allSubjects.rows.map(s => s.idmonhoc)
+            }
           });
         }
 
+        // Use the correct case from database
+        const correctMonhoc = monhocCheck.rows[0].idmonhoc;
+        
         // Check mucdich exists
         const mucDichCheck = await client.query(
           'SELECT idmucdich FROM MUCDICH WHERE idmucdich = $1',
@@ -1123,6 +1145,25 @@ class ExamController {
           error: error.message
         });
       }
+    }
+  }
+
+  static async getSubjects(req, res) {
+    const client = await pool.connect();
+    try {
+      const result = await client.query('SELECT * FROM MONHOC ORDER BY tenmonhoc');
+      res.json({
+        success: true,
+        data: result.rows
+      });
+    } catch (error) {
+      console.error('Error getting subjects:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Lỗi khi lấy danh sách môn học'
+      });
+    } finally {
+      client.release();
     }
   }
 }
