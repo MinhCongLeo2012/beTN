@@ -15,6 +15,9 @@ class ExamController {
   static async createExam(req, res) {
     const client = await pool.connect();
     try {
+      console.log('Request body:', req.body); // Log request body
+      console.log('User info:', req.user); // Log user info
+
       const {
         tende,
         monhoc,
@@ -26,23 +29,44 @@ class ExamController {
 
       // Validate input data
       if (!tende || !monhoc || !mucdich || !khoi || !Array.isArray(questions)) {
+        console.log('Validation failed:', {
+          tende: !!tende,
+          monhoc: !!monhoc,
+          mucdich: !!mucdich,
+          khoi: !!khoi,
+          questions: Array.isArray(questions)
+        });
         return res.status(400).json({
           success: false,
-          message: 'Thiếu thông tin bắt buộc để tạo đề thi'
+          message: 'Thiếu thông tin bắt buộc để tạo đề thi',
+          missingFields: {
+            tende: !tende,
+            monhoc: !monhoc,
+            mucdich: !mucdich,
+            khoi: !khoi,
+            questions: !Array.isArray(questions)
+          }
         });
       }
 
-      console.log('Creating exam with data:', {
-        tende,
-        monhoc,
-        mucdich,
-        khoi,
-        questionsCount: questions.length
-      });
+      // Check if user exists and has required permissions
+      if (!req.user || !req.user.id) {
+        throw new Error('Unauthorized - User not authenticated');
+      }
 
+      console.log('Starting transaction');
       await client.query('BEGIN');
 
       // 1. Tạo đề thi
+      console.log('Creating exam with params:', {
+        userId: req.user.id,
+        tende,
+        questionCount: questions.length,
+        monhoc,
+        mucdich,
+        khoi
+      });
+
       const examResult = await client.query(
         `INSERT INTO DETHI (
           iduser,
@@ -64,8 +88,12 @@ class ExamController {
           khoi
         ]
       ).catch(err => {
-        console.error('Error creating exam:', err);
-        throw new Error(`Lỗi khi tạo đề thi: ${err.message}`);
+        console.error('Database error creating exam:', {
+          code: err.code,
+          message: err.message,
+          detail: err.detail
+        });
+        throw err;
       });
 
       const examId = examResult.rows[0].iddethi;
@@ -74,6 +102,12 @@ class ExamController {
       // 2. Thêm các câu hỏi và đáp án
       for (const [index, question] of questions.entries()) {
         try {
+          console.log(`Processing question ${index + 1}:`, {
+            noidung: !!question.noidung,
+            hasAnswers: !!(question.dap_an_a && question.dap_an_b && question.dap_an_c && question.dap_an_d),
+            dapandung: !!question.dapandung
+          });
+
           // Validate question data
           if (!question.noidung || !question.dapandung) {
             throw new Error(`Câu hỏi ${index + 1} thiếu thông tin bắt buộc`);
@@ -93,11 +127,11 @@ class ExamController {
             [
               examId,
               question.noidung,
-              question.dap_an_a,
-              question.dap_an_b,
-              question.dap_an_c,
-              question.dap_an_d,
-              question.diem || 1 // Default score if not provided
+              question.dap_an_a || '',
+              question.dap_an_b || '',
+              question.dap_an_c || '',
+              question.dap_an_d || '',
+              question.diem || 1
             ]
           );
 
@@ -119,8 +153,11 @@ class ExamController {
           );
 
         } catch (questionError) {
-          console.error(`Error processing question ${index + 1}:`, questionError);
-          throw new Error(`Lỗi khi thêm câu hỏi ${index + 1}: ${questionError.message}`);
+          console.error(`Error processing question ${index + 1}:`, {
+            error: questionError,
+            question: question
+          });
+          throw questionError;
         }
       }
 
@@ -134,18 +171,29 @@ class ExamController {
       });
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Error in createExam:', error);
+      console.error('Error in createExam:', {
+        name: error.name,
+        message: error.message,
+        code: error.code,
+        stack: error.stack
+      });
       
       let statusCode = 500;
       let errorMessage = 'Lỗi khi tạo đề thi';
 
       // Handle specific error cases
-      if (error.code === '23505') {
+      if (error.message.includes('Unauthorized')) {
+        statusCode = 401;
+        errorMessage = 'Không có quyền tạo đề thi';
+      } else if (error.code === '23505') {
         statusCode = 400;
         errorMessage = 'Đề thi với tên này đã tồn tại';
       } else if (error.code === '23503') {
         statusCode = 400;
         errorMessage = 'Dữ liệu tham chiếu không hợp lệ';
+      } else if (error.code === '23502') {
+        statusCode = 400;
+        errorMessage = 'Thiếu thông tin bắt buộc';
       }
 
       res.status(statusCode).json({
@@ -154,7 +202,8 @@ class ExamController {
         error: {
           code: error.code,
           detail: error.detail,
-          message: error.message
+          message: error.message,
+          stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         }
       });
     } finally {
@@ -959,7 +1008,7 @@ class ExamController {
       // Giải thích định dạng câu hỏi
       doc.fontSize(11)
          .text('Mỗi câu hỏi được định dạng theo cấu trúc:')
-         .text('Câu n: (mức đ��) nội dung câu hỏi', { indent: 30 })
+         .text('Câu n: (mức độ) nội dung câu hỏi', { indent: 30 })
          .moveDown();
 
       // Giải thích mức độ
