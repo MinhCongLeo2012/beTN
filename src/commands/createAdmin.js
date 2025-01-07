@@ -1,69 +1,43 @@
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
-const { v4: uuidv4 } = require('uuid');
+const dotenv = require('dotenv');
 
-const pool = new Pool({
-  user: 'postgres',
-  host: 'localhost',
-  database: 'project',
-  password: '123456',
-  port: 5432,
-});
+dotenv.config();
 
-const createAdmin = async () => {
-  const client = await pool.connect();
-  
-  try {
-    // Kiểm tra xem email đã tồn tại chưa
-    const email = 'admin@gmail.com';
-    const checkQuery = 'SELECT * FROM "USER" WHERE email = $1';
-    const checkResult = await client.query(checkQuery, [email]);
+async function createDefaultAdmin() {
+    const pool = new Pool({
+        user: process.env.DB_USER,
+        host: process.env.DB_HOST,
+        password: process.env.DB_PASSWORD,
+        port: process.env.DB_PORT,
+        database: process.env.DB_NAME
+    });
 
-    if (checkResult.rows.length > 0) {
-      console.log('Admin account already exists!');
-      return;
+    try {
+        // Kiểm tra xem admin đã tồn tại chưa
+        const checkAdmin = await pool.query(
+            "SELECT 1 FROM \"USER\" WHERE EMAIL = 'admin@gmail.com'"
+        );
+
+        if (checkAdmin.rows.length === 0) {
+            // Mã hóa mật khẩu
+            const hashedPassword = await bcrypt.hash('admin123', 10);
+
+            // Tạo admin mặc định
+            await pool.query(
+                'INSERT INTO "USER" (HOTEN, EMAIL, MATKHAU, SODIENTHOAI, VAITRO) VALUES ($1, $2, $3, $4, $5)',
+                ['Administrator', 'admin@gmail.com', hashedPassword, '0123456789', 'ADMIN']
+            );
+            console.log('Default admin created successfully');
+        } else {
+            console.log('Admin already exists');
+        }
+        await pool.end();
+    } catch (error) {
+        console.error('Error creating admin:', error);
+        await pool.end();
+        throw error;
     }
+}
 
-    // Tạo mật khẩu mặc định và hash
-    const password = 'admin123';
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-
-    // Thêm tài khoản admin vào database
-    const insertQuery = `
-      INSERT INTO "USER" (
-        iduser,
-        hoten,
-        email,
-        matkhau,
-        vaitro
-      )
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING iduser, email, vaitro
-    `;
-
-    const values = [
-      uuidv4(),
-      'Administrator',
-      email,
-      hashedPassword,
-      'ADMIN'
-    ];
-
-    const result = await client.query(insertQuery, values);
-
-    console.log('Admin account created successfully!');
-    console.log('Email:', email);
-    console.log('Password:', password);
-    console.log('Please change the password after first login.');
-
-  } catch (error) {
-    console.error('Error creating admin account:', error);
-    console.error('Error details:', error.message);
-  } finally {
-    client.release();
-    await pool.end();
-  }
-};
-
-createAdmin(); 
+module.exports = createDefaultAdmin; 
