@@ -19,5 +19,7 @@ router.post('/assign/:id', verifyToken, ExamController.assignExam);
 router.get('/:id/info', verifyToken, ExamController.getExamInfo);
 router.get('/:id/student', verifyToken, ExamController.getExamForStudent);
 router.get('/class/:classId', verifyToken, ExamController.getExamsByClass);
+router.post('/subjects/initialize', verifyToken, ExamController.initializeSubjects);
+router.get('/subjects', verifyToken, ExamController.getSubjects);
 
 module.exports = router;
