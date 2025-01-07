@@ -15,8 +15,10 @@ class ExamController {
   static async createExam(req, res) {
     const client = await pool.connect();
     try {
-      console.log('Request body:', req.body); // Log request body
-      console.log('User info:', req.user); // Log user info
+      console.log('Request body:', {
+        ...req.body,
+        questions: req.body.questions ? `${req.body.questions.length} questions` : undefined
+      });
 
       const {
         tende,
@@ -27,7 +29,59 @@ class ExamController {
         questions
       } = req.body;
 
-      // Validate input data
+      // Validate references first
+      try {
+        // Check monhoc exists
+        const monhocCheck = await client.query(
+          'SELECT idmonhoc FROM MONHOC WHERE idmonhoc = $1',
+          [monhoc]
+        );
+        if (monhocCheck.rows.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Môn học không tồn tại',
+            field: 'monhoc'
+          });
+        }
+
+        // Check mucdich exists
+        const mucDichCheck = await client.query(
+          'SELECT idmucdich FROM MUCDICH WHERE idmucdich = $1',
+          [mucdich]
+        );
+        if (mucDichCheck.rows.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Mục đích không tồn tại',
+            field: 'mucdich'
+          });
+        }
+
+        // Check khoi exists
+        const khoiCheck = await client.query(
+          'SELECT idkhoi FROM KHOI WHERE idkhoi = $1',
+          [khoi]
+        );
+        if (khoiCheck.rows.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Khối không tồn tại',
+            field: 'khoi'
+          });
+        }
+
+        console.log('Reference checks passed:', {
+          monhoc: monhocCheck.rows[0],
+          mucdich: mucDichCheck.rows[0],
+          khoi: khoiCheck.rows[0]
+        });
+
+      } catch (checkError) {
+        console.error('Error checking references:', checkError);
+        throw checkError;
+      }
+
+      // Rest of your existing validation
       if (!tende || !monhoc || !mucdich || !khoi || !Array.isArray(questions)) {
         console.log('Validation failed:', {
           tende: !!tende,
@@ -175,11 +229,14 @@ class ExamController {
         name: error.name,
         message: error.message,
         code: error.code,
-        stack: error.stack
+        detail: error.detail,
+        constraint: error.constraint,
+        table: error.table
       });
       
       let statusCode = 500;
       let errorMessage = 'Lỗi khi tạo đề thi';
+      let errorDetail = null;
 
       // Handle specific error cases
       if (error.message.includes('Unauthorized')) {
@@ -191,6 +248,15 @@ class ExamController {
       } else if (error.code === '23503') {
         statusCode = 400;
         errorMessage = 'Dữ liệu tham chiếu không hợp lệ';
+        if (error.constraint) {
+          if (error.constraint.includes('monhoc')) {
+            errorDetail = 'Môn học không tồn tại';
+          } else if (error.constraint.includes('mucdich')) {
+            errorDetail = 'Mục đích không tồn tại';
+          } else if (error.constraint.includes('khoi')) {
+            errorDetail = 'Khối không tồn tại';
+          }
+        }
       } else if (error.code === '23502') {
         statusCode = 400;
         errorMessage = 'Thiếu thông tin bắt buộc';
@@ -199,8 +265,10 @@ class ExamController {
       res.status(statusCode).json({
         success: false,
         message: errorMessage,
+        detail: errorDetail,
         error: {
           code: error.code,
+          constraint: error.constraint,
           detail: error.detail,
           message: error.message,
           stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
