@@ -36,6 +36,12 @@ app.use('/api/class-details', classDetailRoutes);
 app.use('/api/grading', gradingRoutes);
 app.use('/api', adminRoutes);
 
+// Add this route
+app.get('/api/subjects', ExamController.getSubjects);
+
+// Add this route (make sure it's protected)
+app.post('/api/subjects/initialize', authMiddleware, ExamController.initializeSubjects);
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);

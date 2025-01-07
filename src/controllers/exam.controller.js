@@ -32,24 +32,31 @@ class ExamController {
       // Validate references first
       try {
         // Check monhoc exists
-        console.log('Checking subject with code:', monhoc);
+        const cleanMonhoc = (monhoc || '').trim().toUpperCase();
+        console.log('Checking subject with code:', {
+          original: monhoc,
+          cleaned: cleanMonhoc,
+          type: typeof monhoc
+        });
         
         const monhocCheck = await client.query(
           `SELECT idmonhoc, tenmonhoc 
            FROM MONHOC 
-           WHERE idmonhoc = $1 OR LOWER(idmonhoc) = LOWER($1)`,
-          [monhoc]
+           WHERE UPPER(idmonhoc) = $1`,
+          [cleanMonhoc]
         );
         
-        console.log('Subject check result:', {
-          searchedCode: monhoc,
-          found: monhocCheck.rows.length > 0,
-          result: monhocCheck.rows
-        });
-
         // List all available subjects for debugging
-        const allSubjects = await client.query('SELECT idmonhoc, tenmonhoc FROM MONHOC');
-        console.log('Available subjects:', allSubjects.rows);
+        const allSubjects = await client.query(
+          'SELECT idmonhoc, tenmonhoc FROM MONHOC'
+        );
+        
+        console.log('Database check results:', {
+          searchedCode: cleanMonhoc,
+          found: monhocCheck.rows.length > 0,
+          result: monhocCheck.rows,
+          allSubjects: allSubjects.rows
+        });
 
         if (monhocCheck.rows.length === 0) {
           return res.status(400).json({
@@ -57,8 +64,11 @@ class ExamController {
             message: 'Môn học không tồn tại',
             field: 'monhoc',
             detail: {
-              providedCode: monhoc,
-              availableSubjects: allSubjects.rows.map(s => s.idmonhoc)
+              providedCode: cleanMonhoc,
+              availableSubjects: allSubjects.rows.map(s => ({
+                id: s.idmonhoc,
+                name: s.tenmonhoc
+              }))
             }
           });
         }
@@ -1161,6 +1171,58 @@ class ExamController {
       res.status(500).json({
         success: false,
         message: 'Lỗi khi lấy danh sách môn học'
+      });
+    } finally {
+      client.release();
+    }
+  }
+
+  static async initializeSubjects(req, res) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Default subjects
+      const defaultSubjects = [
+        { id: 'MT', name: 'Mỹ Thuật' },
+        { id: 'TD', name: 'Thể Dục' },
+        { id: 'CN', name: 'Công Nghệ' },
+        { id: 'TIN', name: 'Tin Học' },
+        { id: 'VL', name: 'Vật Lý' },
+        { id: 'HH', name: 'Hóa Học' },
+        { id: 'SH', name: 'Sinh Học' },
+        { id: 'TA', name: 'Tiếng Anh' },
+        { id: 'VAN', name: 'Ngữ Văn' },
+        { id: 'TOAN', name: 'Toán Học' },
+        { id: 'LS', name: 'Lịch Sử' },
+        { id: 'DL', name: 'Địa Lý' },
+        { id: 'GDCD', name: 'Giáo Dục Công Dân' }
+      ];
+
+      for (const subject of defaultSubjects) {
+        await client.query(
+          `INSERT INTO MONHOC (idmonhoc, tenmonhoc)
+           VALUES ($1, $2)
+           ON CONFLICT (idmonhoc) DO UPDATE
+           SET tenmonhoc = EXCLUDED.tenmonhoc`,
+          [subject.id, subject.name]
+        );
+      }
+
+      await client.query('COMMIT');
+
+      res.json({
+        success: true,
+        message: 'Khởi tạo dữ liệu môn học thành công',
+        data: defaultSubjects
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Error initializing subjects:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Lỗi khi khởi tạo dữ liệu môn học',
+        error: error.message
       });
     } finally {
       client.release();
