@@ -1184,19 +1184,23 @@ class ExamController {
 
       // Default subjects
       const defaultSubjects = [
-        { id: 'MT', name: 'Mỹ Thuật' },
-        { id: 'TD', name: 'Thể Dục' },
-        { id: 'CN', name: 'Công Nghệ' },
-        { id: 'TIN', name: 'Tin Học' },
-        { id: 'VL', name: 'Vật Lý' },
-        { id: 'HH', name: 'Hóa Học' },
-        { id: 'SH', name: 'Sinh Học' },
-        { id: 'TA', name: 'Tiếng Anh' },
-        { id: 'VAN', name: 'Ngữ Văn' },
         { id: 'TOAN', name: 'Toán Học' },
-        { id: 'LS', name: 'Lịch Sử' },
-        { id: 'DL', name: 'Địa Lý' },
-        { id: 'GDCD', name: 'Giáo Dục Công Dân' }
+        { id: 'VLY', name: 'Vật Lý' },
+        { id: 'HOA', name: 'Hóa Học' },
+        { id: 'SINH', name: 'Sinh Học' },
+        { id: 'MT', name: 'Mỹ Thuật' },
+        { id: 'TIN', name: 'Tin Học' },
+        { id: 'VAN', name: 'Ngữ Văn' },
+        { id: 'NN1', name: 'Ngoại Ngữ 1' },
+        { id: 'NN2', name: 'Ngoại Ngữ 2' },
+        { id: 'SU', name: 'Lịch Sử' },
+        { id: 'DIA', name: 'Địa Lý' },
+        { id: 'CN', name: 'Công Nghệ' },
+        { id: 'GDTC', name: 'Giáo Dục Thể Chất' },
+        { id: 'AN', name: 'Âm Nhạc' },
+        { id: 'GDQPAN', name: 'Giáo Dục Quốc Phòng An Ninh' },
+        { id: 'GDKTPL', name: 'Giáo Dục Kinh Tế và Pháp Luật' },
+        { id: 'TDTTS', name: 'Tiếng Dân Tộc Thiểu Số' }
       ];
 
       for (const subject of defaultSubjects) {
