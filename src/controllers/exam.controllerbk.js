@@ -15,6 +15,11 @@ class ExamController {
   static async createExam(req, res) {
     const client = await pool.connect();
     try {
+      console.log('Request body:', {
+        ...req.body,
+        questions: req.body.questions ? `${req.body.questions.length} questions` : undefined
+      });
+
       const {
         tende,
         monhoc,
@@ -24,9 +29,130 @@ class ExamController {
         questions
       } = req.body;
 
+      // Validate references first
+      try {
+        // Check monhoc exists
+        const cleanMonhoc = (monhoc || '').trim().toUpperCase();
+        console.log('Checking subject with code:', {
+          original: monhoc,
+          cleaned: cleanMonhoc,
+          type: typeof monhoc
+        });
+        
+        const monhocCheck = await client.query(
+          `SELECT idmonhoc, tenmonhoc 
+           FROM MONHOC 
+           WHERE UPPER(idmonhoc) = $1`,
+          [cleanMonhoc]
+        );
+        
+        // List all available subjects for debugging
+        const allSubjects = await client.query(
+          'SELECT idmonhoc, tenmonhoc FROM MONHOC'
+        );
+        
+        console.log('Database check results:', {
+          searchedCode: cleanMonhoc,
+          found: monhocCheck.rows.length > 0,
+          result: monhocCheck.rows,
+          allSubjects: allSubjects.rows
+        });
+
+        if (monhocCheck.rows.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Môn học không tồn tại',
+            field: 'monhoc',
+            detail: {
+              providedCode: cleanMonhoc,
+              availableSubjects: allSubjects.rows.map(s => ({
+                id: s.idmonhoc,
+                name: s.tenmonhoc
+              }))
+            }
+          });
+        }
+
+        // Use the correct case from database
+        const correctMonhoc = monhocCheck.rows[0].idmonhoc;
+        
+        // Check mucdich exists
+        const mucDichCheck = await client.query(
+          'SELECT idmucdich FROM MUCDICH WHERE idmucdich = $1',
+          [mucdich]
+        );
+        if (mucDichCheck.rows.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Mục đích không tồn tại',
+            field: 'mucdich'
+          });
+        }
+
+        // Check khoi exists
+        const khoiCheck = await client.query(
+          'SELECT idkhoi FROM KHOI WHERE idkhoi = $1',
+          [khoi]
+        );
+        if (khoiCheck.rows.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Khối không tồn tại',
+            field: 'khoi'
+          });
+        }
+
+        console.log('Reference checks passed:', {
+          monhoc: monhocCheck.rows[0],
+          mucdich: mucDichCheck.rows[0],
+          khoi: khoiCheck.rows[0]
+        });
+
+      } catch (checkError) {
+        console.error('Error checking references:', checkError);
+        throw checkError;
+      }
+
+      // Rest of your existing validation
+      if (!tende || !monhoc || !mucdich || !khoi || !Array.isArray(questions)) {
+        console.log('Validation failed:', {
+          tende: !!tende,
+          monhoc: !!monhoc,
+          mucdich: !!mucdich,
+          khoi: !!khoi,
+          questions: Array.isArray(questions)
+        });
+        return res.status(400).json({
+          success: false,
+          message: 'Thiếu thông tin bắt buộc để tạo đề thi',
+          missingFields: {
+            tende: !tende,
+            monhoc: !monhoc,
+            mucdich: !mucdich,
+            khoi: !khoi,
+            questions: !Array.isArray(questions)
+          }
+        });
+      }
+
+      // Check if user exists and has required permissions
+      if (!req.user || !req.user.id) {
+        throw new Error('Unauthorized - User not authenticated');
+      }
+
+      console.log('Starting transaction');
       await client.query('BEGIN');
 
       // 1. Tạo đề thi
+      console.log('Creating exam with params:', {
+        userId: req.user.id,
+        tende,
+        questionCount: questions.length,
+        monhoc,
+        mucdich,
+        khoi
+      });
+
       const examResult = await client.query(
         `INSERT INTO DETHI (
           iduser,
@@ -47,52 +173,82 @@ class ExamController {
           mucdich,
           khoi
         ]
-      );
+      ).catch(err => {
+        console.error('Database error creating exam:', {
+          code: err.code,
+          message: err.message,
+          detail: err.detail
+        });
+        throw err;
+      });
 
       const examId = examResult.rows[0].iddethi;
+      console.log('Created exam with ID:', examId);
 
       // 2. Thêm các câu hỏi và đáp án
-      for (const question of questions) {
-        // Thêm câu hỏi
-        const questionResult = await client.query(
-          `INSERT INTO CAUHOI (
-            iddethi,
-            noidung,
-            dap_an_a,
-            dap_an_b,
-            dap_an_c,
-            dap_an_d,
-            diem
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING idcauhoi`,
-          [
-            examId,
-            question.noidung,
-            question.dap_an_a,
-            question.dap_an_b,
-            question.dap_an_c,
-            question.dap_an_d,
-            question.diem
-          ]
-        );
+      for (const [index, question] of questions.entries()) {
+        try {
+          console.log(`Processing question ${index + 1}:`, {
+            noidung: !!question.noidung,
+            hasAnswers: !!(question.dap_an_a && question.dap_an_b && question.dap_an_c && question.dap_an_d),
+            dapandung: !!question.dapandung
+          });
 
-        const questionId = questionResult.rows[0].idcauhoi;
+          // Validate question data
+          if (!question.noidung || !question.dapandung) {
+            throw new Error(`Câu hỏi ${index + 1} thiếu thông tin bắt buộc`);
+          }
 
-        // Thêm đáp án
-        const answerResult = await client.query(
-          'INSERT INTO DAPAN (dapandung) VALUES ($1) RETURNING iddapan',
-          [question.dapandung]
-        );
+          // Thêm câu hỏi
+          const questionResult = await client.query(
+            `INSERT INTO CAUHOI (
+              iddethi,
+              noidung,
+              dap_an_a,
+              dap_an_b,
+              dap_an_c,
+              dap_an_d,
+              diem
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING idcauhoi`,
+            [
+              examId,
+              question.noidung,
+              question.dap_an_a || '',
+              question.dap_an_b || '',
+              question.dap_an_c || '',
+              question.dap_an_d || '',
+              question.diem || 1
+            ]
+          );
 
-        const answerId = answerResult.rows[0].iddapan;
+          const questionId = questionResult.rows[0].idcauhoi;
+          console.log(`Added question ${index + 1} with ID:`, questionId);
 
-        // Liên kết câu hỏi với đáp án và mức độ
-        await client.query(
-          'INSERT INTO CH_DA_MD (idcauhoi, iddapan, idmucdo) VALUES ($1, $2, $3)',
-          [questionId, answerId, question.mucdo || 'THONG_HIEU'] // Sử dụng mức độ từ câu hỏi hoặc mặc định
-        );
+          // Thêm đáp án
+          const answerResult = await client.query(
+            'INSERT INTO DAPAN (dapandung) VALUES ($1) RETURNING iddapan',
+            [question.dapandung]
+          );
+
+          const answerId = answerResult.rows[0].iddapan;
+
+          // Liên kết câu hỏi với đáp án và mức độ
+          await client.query(
+            'INSERT INTO CH_DA_MD (idcauhoi, iddapan, idmucdo) VALUES ($1, $2, $3)',
+            [questionId, answerId, question.mucdo || 'THONG_HIEU']
+          );
+
+        } catch (questionError) {
+          console.error(`Error processing question ${index + 1}:`, {
+            error: questionError,
+            question: question
+          });
+          throw questionError;
+        }
       }
 
       await client.query('COMMIT');
+      console.log('Exam creation completed successfully');
 
       res.json({
         success: true,
@@ -101,11 +257,54 @@ class ExamController {
       });
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Error in createExam:', error);
-      res.status(500).json({
+      console.error('Error in createExam:', {
+        name: error.name,
+        message: error.message,
+        code: error.code,
+        detail: error.detail,
+        constraint: error.constraint,
+        table: error.table
+      });
+      
+      let statusCode = 500;
+      let errorMessage = 'Lỗi khi tạo đề thi';
+      let errorDetail = null;
+
+      // Handle specific error cases
+      if (error.message.includes('Unauthorized')) {
+        statusCode = 401;
+        errorMessage = 'Không có quyền tạo đề thi';
+      } else if (error.code === '23505') {
+        statusCode = 400;
+        errorMessage = 'Đề thi với tên này đã tồn tại';
+      } else if (error.code === '23503') {
+        statusCode = 400;
+        errorMessage = 'Dữ liệu tham chiếu không hợp lệ';
+        if (error.constraint) {
+          if (error.constraint.includes('monhoc')) {
+            errorDetail = 'Môn học không tồn tại';
+          } else if (error.constraint.includes('mucdich')) {
+            errorDetail = 'Mục đích không tồn tại';
+          } else if (error.constraint.includes('khoi')) {
+            errorDetail = 'Khối không tồn tại';
+          }
+        }
+      } else if (error.code === '23502') {
+        statusCode = 400;
+        errorMessage = 'Thiếu thông tin bắt buộc';
+      }
+
+      res.status(statusCode).json({
         success: false,
-        message: 'Lỗi khi tạo đề thi',
-        error: error.message
+        message: errorMessage,
+        detail: errorDetail,
+        error: {
+          code: error.code,
+          constraint: error.constraint,
+          detail: error.detail,
+          message: error.message,
+          stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        }
       });
     } finally {
       client.release();
@@ -909,7 +1108,7 @@ class ExamController {
       // Giải thích định dạng câu hỏi
       doc.fontSize(11)
          .text('Mỗi câu hỏi được định dạng theo cấu trúc:')
-         .text('Câu n: (mức đ��) nội dung câu hỏi', { indent: 30 })
+         .text('Câu n: (mức độ) nội dung câu hỏi', { indent: 30 })
          .moveDown();
 
       // Giải thích mức độ
@@ -956,6 +1155,81 @@ class ExamController {
           error: error.message
         });
       }
+    }
+  }
+
+  static async getSubjects(req, res) {
+    const client = await pool.connect();
+    try {
+      const result = await client.query('SELECT * FROM MONHOC ORDER BY tenmonhoc');
+      res.json({
+        success: true,
+        data: result.rows
+      });
+    } catch (error) {
+      console.error('Error getting subjects:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Lỗi khi lấy danh sách môn học'
+      });
+    } finally {
+      client.release();
+    }
+  }
+
+  static async initializeSubjects(req, res) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Default subjects
+      const defaultSubjects = [
+        { id: 'TOAN', name: 'Toán Học' },
+        { id: 'VLY', name: 'Vật Lý' },
+        { id: 'HOA', name: 'Hóa Học' },
+        { id: 'SINH', name: 'Sinh Học' },
+        { id: 'MT', name: 'Mỹ Thuật' },
+        { id: 'TIN', name: 'Tin Học' },
+        { id: 'VAN', name: 'Ngữ Văn' },
+        { id: 'NN1', name: 'Ngoại Ngữ 1' },
+        { id: 'NN2', name: 'Ngoại Ngữ 2' },
+        { id: 'SU', name: 'Lịch Sử' },
+        { id: 'DIA', name: 'Địa Lý' },
+        { id: 'CN', name: 'Công Nghệ' },
+        { id: 'GDTC', name: 'Giáo Dục Thể Chất' },
+        { id: 'AN', name: 'Âm Nhạc' },
+        { id: 'GDQPAN', name: 'Giáo Dục Quốc Phòng An Ninh' },
+        { id: 'GDKTPL', name: 'Giáo Dục Kinh Tế và Pháp Luật' },
+        { id: 'TDTTS', name: 'Tiếng Dân Tộc Thiểu Số' }
+      ];
+
+      for (const subject of defaultSubjects) {
+        await client.query(
+          `INSERT INTO MONHOC (idmonhoc, tenmonhoc)
+           VALUES ($1, $2)
+           ON CONFLICT (idmonhoc) DO UPDATE
+           SET tenmonhoc = EXCLUDED.tenmonhoc`,
+          [subject.id, subject.name]
+        );
+      }
+
+      await client.query('COMMIT');
+
+      res.json({
+        success: true,
+        message: 'Khởi tạo dữ liệu môn học thành công',
+        data: defaultSubjects
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Error initializing subjects:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Lỗi khi khởi tạo dữ liệu môn học',
+        error: error.message
+      });
+    } finally {
+      client.release();
     }
   }
 }
